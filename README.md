@@ -53,6 +53,23 @@ Voice is per chat, so parallel chats don't talk over each other. One reply plays
 at a time; a newer reply cuts off an older one. To stop the speech, send any
 prompt or run `/voice-on:voice stop`.
 
+## Read-along pane
+
+In the Claude desktop app, a pane opens beside the chat while a reply is read
+aloud. It shows the reply again, block by block, and lights each word as it is
+said; words already read are dimmed. Tables, code and diagrams are drawn as
+themselves and framed while the voice is on them.
+
+- The header says what you are looking at: "Reply 3 of 8", the reply's title,
+  and when it was read.
+- ◀ Previous and Next ▶ step through this chat's earlier replies. ▶ Read plays
+  the one shown, ■ Stop stops it, and Latest jumps back to the newest.
+- Each block has its own ▶ to hear just that part.
+- With the pane focused: `p` previous, `n` next, `r` read, `s` stop, `l` latest.
+
+Type `/read-along` to open it by hand. Word timing is exact per sentence and
+estimated inside a sentence, so the light can run slightly ahead or behind.
+
 ## What gets read
 
 Only the final reply, not the "let me check" lines before tool calls. Replies
@@ -120,9 +137,13 @@ Set `VOICE_ON_HOME` to keep the settings somewhere other than `~/.claude/voice-o
 - A `UserPromptSubmit` hook stops the speaker when you send a new prompt.
 - Both hooks do nothing unless voice is on somewhere: `~/.claude/voice-on/on`
   lists the chats with voice on, or `*` for all.
-- `speak.py` uses only the Python standard library. The Kokoro engine
-  (`scripts/engines/kokoro.py`) runs in its own venv and speaks sentence by
-  sentence, so the first words start in about a second.
+- `speak.py` uses only the Python standard library. It splits the reply into
+  sentences, has the engine make the audio for each (Kokoro in its own venv,
+  `say` or `espeak-ng` otherwise), plays them in turn, and writes `now.json`:
+  the reply, its blocks, and when each sentence started and how long it lasts.
+  The first words start in about a second.
+- `hooks/register.tsx` is the read-along pane, a Claude Code mod: it watches
+  `now.json` and draws the reply with the word being said lit.
 
 Files in `~/.claude/voice-on/`:
 
@@ -130,6 +151,7 @@ Files in `~/.claude/voice-on/`:
 - `on`: the chats with voice on.
 - `last/`: each chat's last reply, for `repeat`. Kept only while voice is on
   somewhere, and deleted after a week.
+- `now.json`: the reply being read and its timings, for the pane.
 - `voice.log`: one line per spoken reply or error. Look here if nothing is heard.
 - `venv/`, `models/`: the Kokoro engine, if installed.
 
@@ -165,6 +187,12 @@ Issues and pull requests are welcome. Run the tests with:
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+```bash
+claude plugin test .
+```
+
+The second runs the pane's tests (`tests/pane.test.tsx`) against Claude Code.
 
 `python3 scripts/speak.py --clean FILE` prints what would be said for a markdown
 file or a transcript (`.jsonl`), which helps when changing how replies are read.

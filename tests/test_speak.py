@@ -58,6 +58,61 @@ class CleanForSpeech(unittest.TestCase):
                          "A flowchart.\nUser to Claude, types.\nClaude to Voice.")
 
 
+class Segments(unittest.TestCase):
+    REPLY = ("## Plan\n\nFirst **step**: edit `src/a/b.ts`.\n\n- one item\n1. numbered\n\n"
+             "| A | B |\n|---|---|\n| x | \u2705 |\n\n```python\nprint(1)\n```\n> a quote")
+
+    def test_blocks_keep_their_kind_and_source(self):
+        segs = [s for s in speak.segments(self.REPLY) if s["kind"] != "break"]
+        self.assertEqual([s["kind"] for s in segs], ["heading", "text", "item", "item", "table", "code", "quote"])
+        self.assertEqual(segs[0]["level"], 2)
+        self.assertTrue(segs[2]["bullet"])
+        self.assertEqual(segs[4]["source"], "| A | B |\n|---|---|\n| x | \u2705 |")
+        self.assertEqual((segs[5]["lang"], segs[5]["source"]), ("python", "print(1)"))
+
+    def test_word_offsets_point_into_the_spoken_text(self):
+        segs = speak.segments(self.REPLY)
+        words = speak.spoken_text(segs).split()
+        for seg in segs:
+            self.assertEqual(words[seg["w0"]:seg["w0"] + seg["words"]], seg["spoken"].split())
+
+    def test_chunks_know_where_their_words_start(self):
+        text = speak.clean_for_speech(self.REPLY + "\n\n.\n\n" + "A long sentence goes here. " * 20)
+        words = text.split()
+        chunks = speak.make_chunks(text)
+        self.assertLessEqual(len(chunks[0]["text"]), 80)  # the first is short, so speech starts fast
+        for c in chunks:
+            self.assertEqual(words[c["w0"]:c["w0"] + len(c["text"].split())], c["text"].split())
+
+
+class Reading(unittest.TestCase):
+    def test_now_json_follows_the_reading(self):
+        def fake_synth(engine, cfg, chunks, folder):
+            for i, _ in enumerate(chunks):
+                path = os.path.join(folder, "%d.wav" % i)
+                import wave
+                with wave.open(path, "wb") as w:
+                    w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000)
+                    w.writeframes(b"\0\0" * 4000)
+                yield path
+
+        with mock.patch.object(speak, "system_synth", fake_synth), \
+                mock.patch.object(speak, "pick_engine", lambda cfg: "say"), \
+                mock.patch.object(speak, "system_engine", lambda: "say"), \
+                mock.patch.object(speak, "audio_player", lambda: ["true"]):
+            speak.read_aloud("# Hi\n\nOne. Two.", "chat-1")
+            with open(speak.NOW_FILE) as f:
+                now = json.load(f)
+            self.assertEqual((now["session"], now["state"], now["base"]), ("chat-1", "done", 0))
+            self.assertEqual(now["markdown"], "# Hi\n\nOne. Two.")
+            self.assertTrue(all(c["t0"] and c["dur"] == 0.5 for c in now["chunks"]))
+
+            speak.read_aloud("# Hi\n\nOne. Two.", "chat-1", part=2)
+            with open(speak.NOW_FILE) as f:
+                now = json.load(f)
+            self.assertEqual((now["part"], now["base"], now["chunks"][0]["text"]), (2, 1, "One. Two."))
+
+
 class LastReply(unittest.TestCase):
     def test_only_text_after_the_last_tool_call(self):
         entries = [
@@ -109,7 +164,7 @@ class OnOff(unittest.TestCase):
                 hook = {"session_id": sid, "last_assistant_message": "**Hello** there"}
                 with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(hook))):
                     speak.hook_stop()
-        spoken.assert_called_once_with("Hello there.", "chat-1")
+        spoken.assert_called_once_with("**Hello** there", "chat-1")  # the speaker cleans it
         with open(speak.last_paths("chat-2")[0]) as f:
             self.assertEqual(f.read(), "**Hello** there")  # kept for repeat, not spoken
 
