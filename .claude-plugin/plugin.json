@@ -1,0 +1,29 @@
+{
+  "name": "voice-on",
+  "version": "1.0.0",
+  "description": "Claude reads its replies out loud. Turn it on per chat; a new prompt stops the speech. Uses the system voice (macOS say, espeak-ng on Linux) or the free Kokoro neural voice, all offline.",
+  "author": {
+    "name": "Hesham Fouad",
+    "url": "https://github.com/heshamfd195"
+  },
+  "homepage": "https://github.com/heshamfd195/voice-on",
+  "repository": "https://github.com/heshamfd195/voice-on",
+  "license": "MIT",
+  "keywords": [
+    "voice",
+    "text-to-speech",
+    "tts",
+    "accessibility",
+    "speech",
+    "kokoro",
+    "hooks"
+  ],
+  "network": {
+    "hosts": [
+      "pypi.org",
+      "files.pythonhosted.org",
+      "github.com",
+      "release-assets.githubusercontent.com"
+    ]
+  }
+}

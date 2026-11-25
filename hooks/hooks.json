@@ -1,0 +1,27 @@
+{
+  "description": "voice-on: speak each finished reply where voice is on; a new prompt stops the speech.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/speak.py\" --stop",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
