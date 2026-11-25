@@ -40,6 +40,7 @@ You need `python3` (3.9 or newer) on your PATH. On Linux, also install
 | `/voice-on:voice on all` | Read every chat's replies aloud |
 | `/voice-on:voice off` | Silence this chat (`off all` silences every chat) |
 | `/voice-on:voice stop` | Stop talking now |
+| `/voice-on:voice speed 1.5` | Read faster (2) or slower (0.75); 1 is normal |
 | `/voice-on:voice repeat` | Read the last reply again |
 | `/voice-on:voice status` | What is on, and which voice |
 | `/voice-on:voice test` | Say a test sentence |
@@ -52,6 +53,25 @@ You can also just ask: "read your replies out loud", "say that again",
 Voice is per chat, so parallel chats don't talk over each other. One reply plays
 at a time; a newer reply cuts off an older one. To stop the speech, send any
 prompt or run `/voice-on:voice stop`.
+
+## Read-along pane
+
+In the Claude desktop app, a pane opens beside the chat while a reply is read
+aloud. It shows the reply again, block by block, and lights each word as it is
+said; words already read are dimmed. Tables, code and diagrams are drawn as
+themselves and framed while the voice is on them.
+
+- The header says what you are looking at: "Reply 3 of 8", the reply's title,
+  and when it was read.
+- ◀ Previous and Next ▶ step through this chat's earlier replies. ▶ Read plays
+  the one shown, ■ Stop stops it, and Latest jumps back to the newest.
+- Each block has its own ▶ to hear just that part.
+- Speed: 0.75×, 1×, 1.25×, 1.5× and 2×. Changing it while a reply is read picks
+  up again from the block being read, at the new speed.
+- With the pane focused: `p` previous, `n` next, `r` read, `s` stop, `l` latest.
+
+Type `/read-along` to open it by hand. Word timing is exact per sentence and
+estimated inside a sentence, so the light can run slightly ahead or behind.
 
 ## What gets read
 
@@ -96,14 +116,24 @@ Changes apply to the next reply.
 ```json
 {
   "engine": "auto",
-  "say": {"voice": "", "rate": 190},
-  "espeak": {"voice": "en-us", "rate": 175},
-  "kokoro": {"voice": "af_heart", "speed": 1.1, "lang": "en-us"}
+  "speed": 1.0,
+  "say": {"voice": "", "rate": 190, "german_voice": "Anna"},
+  "espeak": {"voice": "en-us", "rate": 175, "german_voice": "de"},
+  "kokoro": {"voice": "af_heart", "speed": 1.1, "lang": "en-us"},
+  "german_voice": ""
 }
 ```
 
 - `engine`: `auto` (Kokoro if installed, otherwise the system voice), `say`,
   `espeak` or `kokoro`.
+- `speed`: how fast every voice reads, 1 being its normal pace (0.5 to 2.5).
+  The pane's speed buttons and `/voice-on:voice speed` set it. Kokoro itself
+  tops out at twice its normal speed.
+- `german_voice`: optional, for German learners. When set, text the reply writes
+  «like this» is read in a German voice: with Kokoro, by the Piper voice of that
+  name (`models/piper/<name>.onnx`, with `piper-tts` installed in the venv, for
+  example `de_DE-kerstin-low`); with `say` or `espeak-ng`, by their own
+  `german_voice`.
 - `say.voice`: empty for the system default, or a name such as Samantha, Daniel
   or Reed (`say -v '?'` lists them). `rate` is words per minute.
 - `espeak.voice`: a voice such as `en-us` or `en-gb` (`espeak-ng --voices=en`).
@@ -120,9 +150,13 @@ Set `VOICE_ON_HOME` to keep the settings somewhere other than `~/.claude/voice-o
 - A `UserPromptSubmit` hook stops the speaker when you send a new prompt.
 - Both hooks do nothing unless voice is on somewhere: `~/.claude/voice-on/on`
   lists the chats with voice on, or `*` for all.
-- `speak.py` uses only the Python standard library. The Kokoro engine
-  (`scripts/engines/kokoro.py`) runs in its own venv and speaks sentence by
-  sentence, so the first words start in about a second.
+- `speak.py` uses only the Python standard library. It splits the reply into
+  sentences, has the engine make the audio for each (Kokoro in its own venv,
+  `say` or `espeak-ng` otherwise), plays them in turn, and writes `now.json`:
+  the reply, its blocks, and when each sentence started and how long it lasts.
+  The first words start in about a second.
+- `hooks/register.tsx` is the read-along pane, a Claude Code mod: it watches
+  `now.json` and draws the reply with the word being said lit.
 
 Files in `~/.claude/voice-on/`:
 
@@ -130,6 +164,7 @@ Files in `~/.claude/voice-on/`:
 - `on`: the chats with voice on.
 - `last/`: each chat's last reply, for `repeat`. Kept only while voice is on
   somewhere, and deleted after a week.
+- `now.json`: the reply being read and its timings, for the pane.
 - `voice.log`: one line per spoken reply or error. Look here if nothing is heard.
 - `venv/`, `models/`: the Kokoro engine, if installed.
 
@@ -165,6 +200,12 @@ Issues and pull requests are welcome. Run the tests with:
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+```bash
+claude plugin test .
+```
+
+The second runs the pane's tests (`tests/pane.test.tsx`) against Claude Code.
 
 `python3 scripts/speak.py --clean FILE` prints what would be said for a markdown
 file or a transcript (`.jsonl`), which helps when changing how replies are read.
