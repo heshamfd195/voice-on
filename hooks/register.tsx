@@ -9,7 +9,8 @@
 // The pane draws the reply again, block by block: headings, prose and lists as
 // words that dim once read and light while said; tables, code and diagrams as
 // themselves, framed while the voice is on them. Previous and Next step through this
-// chat's earlier replies, read from the session; Read plays the one shown.
+// chat's earlier replies, read from the session; Read plays the one shown. The speed
+// buttons set the voice's speed (config.json "speed") and pick up where it was.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
@@ -25,6 +26,10 @@ const STALE_MS = 4000
 
 const reading = atom({ plugin: 'voice-on', key: 'reading' } as const, null, { shape: 'reading-1' })
 const shown = atom({ plugin: 'voice-on', key: 'shown' } as const, null, { shape: 'shown-1' })
+const speed = atom({ plugin: 'voice-on', key: 'speed' } as const, 1, { shape: 'speed-1' })
+
+/** The speeds the pane offers: 1 is the voice's normal pace. */
+export const SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const
 
 type Chunk = { w0: number; text: string; t0: number | null; dur: number | null }
 
@@ -47,11 +52,21 @@ type Message = { role: string; text: string; toolUses: readonly unknown[]; toolR
 // Module variables: a reload starts them over, and the next tick refills them.
 let sessionId = ''
 let nowPath = ''
+let configPath = ''
 let speakPath = ''
+let configMtime = -1
 let file: NowFile | undefined
 let seenMtime = -1
 let seenId = 0
 let openedFor = 0
+
+/** A word as shown: German comes marked [de]...[/de] for the voice, not for the eye. */
+const bare = (word: string) => word.replace(/\[\/?de\]/g, '')
+
+/** The block the word `word` is in, or -1. */
+export function blockAt(segments: readonly Segment[], word: number): number {
+  return segments.findIndex(s => word >= s.w0 && word < s.w0 + s.words)
+}
 
 /** The word of `text` being said `elapsed` seconds into a chunk lasting `dur`. */
 export function wordAt(text: string, elapsed: number, dur: number): number {
@@ -124,7 +139,7 @@ export function indexOf(list: readonly string[], markdown: string): number {
 export function titleOf(segments: readonly Segment[]): string {
   const first =
     segments.find(s => s.kind === 'heading') ?? segments.find(s => s.spoken.trim() !== '')
-  const text = (first?.spoken ?? '').split('\n')[0]?.replace(/[.:]$/, '') ?? ''
+  const text = bare((first?.spoken ?? '').split('\n')[0] ?? '').replace(/[.:]$/, '')
   return text.length > 70 ? `${text.slice(0, 67).trimEnd()}…` : text
 }
 
@@ -171,7 +186,32 @@ async function follow($: EngineInterface, f: NowFile) {
   await update($, shown, s => (s && s.markdown === f.markdown ? { ...s, index, total: list.length } : s))
 }
 
+/** The speed config.json holds, read again whenever the file changes. */
+async function readSpeed($: EngineInterface) {
+  const stat = await $.fs.stat(configPath).catch(() => undefined)
+  if (!stat || stat.mtimeMs === configMtime) return
+  configMtime = stat.mtimeMs
+  try {
+    const value = Number((JSON.parse(await $.fs.read(configPath)) as { speed?: unknown }).speed ?? 1)
+    if (Number.isFinite(value) && value > 0 && value !== (await read($, speed))) await update($, speed, () => value)
+  } catch {
+    // caught mid-write: the next tick reads it
+  }
+}
+
+/** Set the voice's speed; if this chat's reply is being read, carry on from its block at the new speed. */
+async function setSpeed($: EngineInterface, value: number) {
+  await python($, ['--speed', String(value)])
+  await update($, speed, () => value)
+  const r = await read($, reading)
+  if (!file || !r || (r.state !== 'playing' && r.state !== 'making')) return
+  const at = blockAt(file.segments, r.word)
+  const args = file.part !== null ? ['--part', String(file.part)] : at > 0 ? ['--from', String(at)] : []
+  await python($, ['--speak', ...args], file.markdown)
+}
+
 async function tick($: EngineInterface) {
+  await readSpeed($)
   const stat = await $.fs.stat(nowPath).catch(() => undefined)
   if (!stat) return
   if (stat.mtimeMs !== seenMtime) {
@@ -203,7 +243,9 @@ export const register: Register = on => {
     const started = await next(e)
     sessionId = await $.session.id()
     const home = (await $.env.get('VOICE_ON_HOME')) || `${(await $.env.get('HOME')) ?? ''}/.claude/voice-on`
-    nowPath = `${home.replace(/^~(?=\/)/, (await $.env.get('HOME')) ?? '~')}/now.json`
+    const dir = home.replace(/^~(?=\/)/, (await $.env.get('HOME')) ?? '~')
+    nowPath = `${dir}/now.json`
+    configPath = `${dir}/config.json`
     speakPath = `${$.plugin.root}/scripts/speak.py`
     await $.command.register({
       name: 'read-along',
@@ -223,6 +265,7 @@ export const register: Register = on => {
     const { Box, Text, Button, Code, Markdown } = $.ui.resolve(e)
     const r = await read($, reading)
     const s = await read($, shown)
+    const pace = await read($, speed)
     const now = await $.clock.now()
 
     if (!s) {
@@ -266,7 +309,7 @@ export const register: Register = on => {
         .split('\n')
         .filter(line => line.trim() !== '')
         .map(line => {
-          const words = line.split(/\s+/).filter(Boolean)
+          const words = line.split(/\s+/).filter(Boolean).map(bare)
           const first = w0
           w0 += words.length
           const said = Math.max(0, Math.min(words.length, word - first))
@@ -387,6 +430,20 @@ export const register: Register = on => {
               Latest
             </Button>
           )}
+        </Box>
+        <Box flexDirection="row" gap={1} alignItems="center">
+          <Text dimColor>Speed</Text>
+          {SPEEDS.map(x => (
+            <Button
+              key={`speed-${x}`}
+              plain={x === pace ? undefined : true}
+              variant={x === pace ? 'primary' : undefined}
+              dimColor={x !== pace}
+              onPress={() => void setSpeed($, x).catch(() => undefined)}
+            >
+              {`${x}×`}
+            </Button>
+          ))}
         </Box>
         <Box flexDirection="column" gap={1}>
           {blocks}

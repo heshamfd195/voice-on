@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { indexOf, place, replies, titleOf, wordAt } from '../hooks/register'
+import { blockAt, indexOf, place, replies, titleOf, wordAt } from '../hooks/register'
 import type { NowFile } from '../hooks/register'
 import type { Segment } from '../types'
 
@@ -21,10 +21,10 @@ const PANE = {
 const SEGMENTS: Segment[] = [
   { kind: 'heading', source: '## The plan', spoken: 'The plan.', level: 2, w0: 0, words: 2 },
   { kind: 'break', source: '', spoken: '', w0: 2, words: 0 },
-  { kind: 'text', source: 'First we read it.', spoken: 'First we read it.', w0: 2, words: 4 },
+  { kind: 'text', source: 'First we read «es».', spoken: 'First we read [de]es.[/de]', w0: 2, words: 4 },
   { kind: 'code', source: 'print(1)', spoken: "There's Python code on screen.", lang: 'python', w0: 6, words: 5 },
 ]
-const MARKDOWN = '## The plan\n\nFirst we read it.\n\n```python\nprint(1)\n```'
+const MARKDOWN = '## The plan\n\nFirst we read «es».\n\n```python\nprint(1)\n```'
 
 const ok = (stdout = '') => ({
   value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
@@ -69,6 +69,8 @@ test('replies are the text after each turn last tool call', () => {
   expect(indexOf(list, ' Found   it. ')).toBe(0)
   expect(indexOf(list, 'Something else')).toBe(-1)
   expect(titleOf(SEGMENTS)).toBe('The plan')
+  expect(blockAt(SEGMENTS, 3)).toBe(2)
+  expect(blockAt(SEGMENTS, 7)).toBe(3)
 })
 
 test('the pane names the reply, lights the word said, and its buttons drive speak.py', async ($, on) => {
@@ -104,18 +106,23 @@ test('the pane names the reply, lights the word said, and its buttons drive spea
     expect((await ui.find({ type: 'Text', text: /^we$/ }))?.text).toBe('we') // word 3: lit
     expect((await ui.find({ type: 'Text', text: /^First $/ }))?.text).toBe('First ') // read: dimmed
     expect(await ui.find({ key: 'stop' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /\[de\]/ })).toBeUndefined() // German marks are not shown
+    expect(await ui.find({ key: 'speed-1.25' })).toBeDefined()
     await ui.unmount()
   }
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'stop' })
   await ui.press({ key: 'part-2' })
   await ui.press({ key: 'previous' })
+  await ui.press({ key: 'speed-1.5' })
   await ui.unmount()
   expect(ran[0]?.argv).toContain('--halt')
   expect(ran[1]?.argv.slice(2, 5)).toEqual(['--speak', '--part', '2'])
   expect(ran[1]?.stdin).toBe(MARKDOWN)
   expect(ran[2]?.argv).toContain('--segments') // Previous loads the older reply's blocks
   expect(ran[2]?.stdin).toBe('An older reply.')
+  expect(ran[3]?.argv.slice(2, 4)).toEqual(['--speed', '1.5'])
+  expect((held.get('speed')?.value as { value: number }).value).toBe(1.5)
   const shown = held.get('shown')?.value as { value: { index: number; follow: boolean } }
   expect(shown.value.index).toBe(0) // Previous: the older reply is shown, and the pane stops following
   expect(shown.value.follow).toBe(false)

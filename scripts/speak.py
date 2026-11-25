@@ -12,12 +12,13 @@ By hand (the voice skill runs these):
   speak.py --repeat        read this chat's last reply again
   speak.py --halt          stop speaking now
   speak.py --say "text"    speak a test sentence with the current settings
+  speak.py --speed [X]     set the speed (1 normal, 1.5 faster, 0.75 slower) or show it
   speak.py --voices        list the voices of the current engine
   speak.py --setup kokoro  install the Kokoro neural voice (about 120 MB)
   speak.py --clean FILE    print what would be said for a text file or transcript
 
 For the read-along pane (hooks/register.tsx), with a reply's markdown on stdin:
-  speak.py --speak [--part N]  read it aloud (or only its block N, from 0)
+  speak.py --speak [--part N | --from N]  read it aloud: all, only block N, or from block N
   speak.py --segments          print its blocks as JSON: what is shown and what is said
 
 Add --session ID to name the chat; the skill and the pane pass it. Without it the
@@ -54,10 +55,14 @@ MODELS_DIR = os.path.join(DATA, "models")
 
 DEFAULTS = {
     "engine": "auto",
-    "say": {"voice": "", "rate": 190},
-    "espeak": {"voice": "en-us", "rate": 175},
+    "speed": 1.0,
+    "say": {"voice": "", "rate": 190, "german_voice": "Anna"},
+    "espeak": {"voice": "en-us", "rate": 175, "german_voice": "de"},
     "kokoro": {"voice": "af_heart", "speed": 1.1, "lang": "en-us"},
+    "german_voice": "",
 }
+SPEEDS = (0.5, 2.5)  # the speed multiplier's range
+DE = re.compile(r"\[/?de\]")
 
 KOKORO_RELEASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 KOKORO_FILES = {"kokoro-v1.0.int8.onnx": 92361271, "voices-v1.0.bin": 28214398}
@@ -86,6 +91,31 @@ def write_default_config():
         with open(CONFIG_FILE, "w") as f:
             json.dump(DEFAULTS, f, indent=2)
             f.write("\n")
+
+
+def speed_of(cfg):
+    try:
+        return min(SPEEDS[1], max(SPEEDS[0], float(cfg.get("speed") or 1.0)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def set_speed(value):
+    """Save the speed multiplier (1 is normal) in config.json, keeping every other setting."""
+    speed = speed_of({"speed": value})
+    os.makedirs(DATA, exist_ok=True)
+    try:
+        with open(CONFIG_FILE) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        cfg = json.loads(json.dumps(DEFAULTS))
+    cfg["speed"] = speed
+    tmp = CONFIG_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, CONFIG_FILE)
+    return speed
 
 
 def log(msg):
@@ -190,7 +220,9 @@ def shorten_path(m):
     return name
 
 
-def clean_inline(s):
+def clean_inline(s, german=False):
+    if german:  # German written «like this» is read in the German voice, marked [de]...[/de]
+        s = re.sub(r"«([^»\n]+)»", lambda m: "[de]" + m.group(1).strip() + "[/de]", s)
     s = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", s)            # images
     s = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", s)             # links -> their text
     s = re.sub(r"<(https?://[^>]+)>", "a link", s)
@@ -411,19 +443,29 @@ def speak_block(lang, lines, said):
     return "code", [line]
 
 
-def segments(text):
+def pause(line):
+    """A full stop at the end of a line that has none, so each line ends in a pause.
+    After German the stop goes inside its mark, so the pause stays in German."""
+    if line.endswith("[/de]"):
+        return line if re.search(r"[.!?:;,]\[/de\]$", line) else line[:-5] + ".[/de]"
+    return line + "." if line and not re.search(r"[.!?:;,]$", line) else line
+
+
+def segments(text, german=None):
     """The reply as blocks, each to show and to say.
 
     Each block: kind (heading, text, item, quote, table, code, diagram, drawing or
     break), source (its markdown), spoken (what is said for it, maybe nothing),
     and for some lang, level or bullet. Then w0 and words: where its spoken words
-    start in the whole spoken text, and how many there are."""
+    start in the whole spoken text, and how many there are. With `german` (by
+    default: when config.json names a german_voice) «German» is marked [de]...[/de]."""
+    if german is None:
+        german = bool(load_config().get("german_voice"))
     segs, said_code = [], set()
     in_code, fence, lang, block, table = False, "", "", [], []
 
     def add(kind, source, spoken, **extra):
-        lines = [l + "." if l and not re.search(r"[.!?:;,]$", l) else l for l in spoken]
-        segs.append(dict(kind=kind, source=source, spoken="\n".join(lines), **extra))
+        segs.append(dict(kind=kind, source=source, spoken="\n".join(pause(l) for l in spoken), **extra))
 
     def end_table():
         if table:
@@ -464,8 +506,8 @@ def segments(text):
             kind, extra, line = "item", {}, number.group(1) + ". " + line[number.end():]
         else:
             kind, extra = "text", {}
-        said = clean_inline(line)
-        if said:
+        said = clean_inline(line, german)
+        if DE.sub("", said).strip():
             add(kind, raw, [said], **extra)
         else:
             add("break", raw, [""])
@@ -485,9 +527,9 @@ def spoken_text(segs):
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-def clean_for_speech(text):
+def clean_for_speech(text, german=None):
     """Markdown as it should sound: tables and diagrams described, code named, symbols dropped."""
-    return spoken_text(segments(text))
+    return spoken_text(segments(text, german))
 
 
 # ---------- engines ----------
@@ -524,29 +566,37 @@ def audio_player():
 
 def make_chunks(text):
     """The text in chunks of whole sentences, about 200 characters, the first one short
-    so speech starts fast. Each chunk's w0 is where its words start in the text."""
-    chunks, current, start, w = [], "", 0, 0
-    for sentence in re.split(r"(?<=[.!?:;])\s+|\n+", text):
-        count = len(sentence.split())
-        sentence = sentence.strip()
-        if not re.search(r"\w", sentence):  # nothing to say: the next chunk starts after it
-            if current:
-                chunks.append({"w0": start, "text": current})
-                current = ""
+    so speech starts fast. Each chunk's w0 is where its words start in the text, and
+    its lang is "de" for German marked [de]...[/de], else "en": a chunk never mixes them."""
+    runs, pos = [], 0
+    for m in re.finditer(r"\[de\](.*?)\[/de\]", text, re.S):
+        runs += [(text[pos:m.start()], "en"), (m.group(1), "de")]
+        pos = m.end()
+    runs.append((text[pos:], "en"))
+    chunks, current, start, lang, w = [], "", 0, "en", 0
+
+    def flush():
+        if current:
+            chunks.append({"w0": start, "text": current, "lang": lang})
+        return ""
+
+    for piece, piece_lang in runs:
+        for sentence in re.split(r"(?<=[.!?:;])\s+|\n+", piece):
+            count = len(sentence.split())
+            sentence = sentence.strip()
+            if not re.search(r"\w", sentence):  # nothing to say: the next chunk starts after it
+                current = flush()
+                w += count
+                continue
+            if current and (piece_lang != lang or len(current) + len(sentence) > 200):
+                current = flush()
+            if not current:
+                start, lang = w, piece_lang
+            current = (current + " " + sentence).strip()
             w += count
-            continue
-        if current and len(current) + len(sentence) > 200:
-            chunks.append({"w0": start, "text": current})
-            current = ""
-        if not current:
-            start = w
-        current = (current + " " + sentence).strip()
-        w += count
-        if not chunks and len(current) > 60:
-            chunks.append({"w0": start, "text": current})
-            current = ""
-    if current:
-        chunks.append({"w0": start, "text": current})
+            if not chunks and len(current) > 60:
+                current = flush()
+    flush()
     return chunks
 
 
@@ -555,22 +605,25 @@ def wav_seconds(path):
         return w.getnframes() / float(w.getframerate())
 
 
-def system_command(engine, cfg, path):
-    """The command that writes `path` (a wav) for text given on stdin."""
+def system_command(engine, cfg, path, lang="en"):
+    """The command that writes `path` (a wav) for text given on stdin, at the set speed."""
     if engine == "say":
         opts = cfg.get("say", {})
-        cmd = ["say", "-r", str(opts.get("rate", 190)), "-o", path,
-               "--data-format=LEI16@22050", "-f", "-"]
-        if opts.get("voice"):
-            cmd[1:1] = ["-v", opts["voice"]]
+        rate = int(float(opts.get("rate", 190)) * speed_of(cfg))
+        cmd = ["say", "-r", str(rate), "-o", path, "--data-format=LEI16@22050", "-f", "-"]
+        voice = opts.get("german_voice") if lang == "de" else opts.get("voice")
+        if voice:
+            cmd[1:1] = ["-v", voice]
         return cmd
     exe = shutil.which("espeak-ng") or shutil.which("espeak")
     if not exe:
         raise RuntimeError("espeak-ng is not installed")
     opts = cfg.get("espeak", {})
-    cmd = [exe, "-s", str(opts.get("rate", 175)), "-w", path, "--stdin"]
-    if opts.get("voice"):
-        cmd[1:1] = ["-v", opts["voice"]]
+    rate = int(float(opts.get("rate", 175)) * speed_of(cfg))
+    cmd = [exe, "-s", str(rate), "-w", path, "--stdin"]
+    voice = opts.get("german_voice") if lang == "de" else opts.get("voice")
+    if voice:
+        cmd[1:1] = ["-v", voice]
     return cmd
 
 
@@ -578,7 +631,8 @@ def system_synth(engine, cfg, chunks, folder):
     """A wav file per chunk from say or espeak-ng, each made while the one before plays."""
     def start(i):
         path = os.path.join(folder, "%03d.wav" % i)
-        proc = subprocess.Popen(system_command(engine, cfg, path), stdin=subprocess.PIPE,
+        proc = subprocess.Popen(system_command(engine, cfg, path, chunks[i].get("lang", "en")),
+                                stdin=subprocess.PIPE,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         proc.stdin.write(chunks[i]["text"].encode())
         proc.stdin.close()
@@ -597,11 +651,15 @@ def kokoro_synth(cfg, chunks, folder):
     """A wav file per chunk from Kokoro (engines/kokoro.py in its venv), made ahead of playback."""
     if not kokoro_installed():
         raise RuntimeError("kokoro is not installed; run: speak.py --setup kokoro")
-    opts = dict(cfg.get("kokoro", {}), models=MODELS_DIR, audio=folder)
+    opts = dict(cfg.get("kokoro", {}), models=MODELS_DIR, audio=folder,
+                german_voice=cfg.get("german_voice") or "")
+    # Kokoro takes speeds from 0.5 to 2: the voice's own speed times the speed set
+    opts["speed"] = round(min(2.0, max(0.5, float(opts.get("speed", 1.0)) * speed_of(cfg))), 3)
     script = os.path.join(ROOT, "scripts", "engines", "kokoro.py")
     proc = subprocess.Popen([VENV_PYTHON, script, json.dumps(opts)], stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    proc.stdin.write(json.dumps([c["text"] for c in chunks]).encode())
+    proc.stdin.write(json.dumps([{"text": c["text"], "lang": c.get("lang", "en")}
+                                 for c in chunks]).encode())
     proc.stdin.close()
     try:
         for _ in chunks:
@@ -617,20 +675,15 @@ def kokoro_synth(cfg, chunks, folder):
 def speak_direct(text, cfg):
     """No audio player: the system voice speaks straight out, without word timings."""
     engine = system_engine()
-    if engine == "say":
-        opts = cfg.get("say", {})
-        cmd = ["say", "-r", str(opts.get("rate", 190)), "-f", "-"]
-        if opts.get("voice"):
-            cmd[1:1] = ["-v", opts["voice"]]
-    elif engine == "espeak":
-        opts = cfg.get("espeak", {})
-        exe = shutil.which("espeak-ng") or shutil.which("espeak")
-        cmd = [exe, "-s", str(opts.get("rate", 175)), "--stdin"]
-        if opts.get("voice"):
-            cmd[1:1] = ["-v", opts["voice"]]
-    else:
+    if not engine:
         raise RuntimeError("no voice found: install espeak-ng, or run --setup kokoro")
-    subprocess.run(cmd, input=text.encode(), check=True)
+    cmd = system_command(engine, cfg, "")
+    if engine == "say":  # spoken out, not written: drop "-o <path>" and the file format
+        cmd = [p for p in cmd if p != "--data-format=LEI16@22050"]
+        del cmd[cmd.index("-o"):cmd.index("-o") + 2]
+    else:
+        del cmd[cmd.index("-w"):cmd.index("-w") + 2]
+    subprocess.run(cmd, input=DE.sub("", text).encode(), check=True)
 
 
 HALTED = []
@@ -707,13 +760,18 @@ def speak_reading(text, cfg, now):
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def read_aloud(markdown, sid="", part=None, cfg=None):
-    """Read a reply (or only its block `part`) aloud, now, keeping now.json up to date."""
-    segs = segments(markdown)
+def read_aloud(markdown, sid="", part=None, cfg=None, start=None):
+    """Read a reply aloud, now, keeping now.json up to date: the whole of it, only its
+    block `part`, or from block `start` to the end."""
+    cfg = cfg or load_config()
+    segs = segments(markdown, bool(cfg.get("german_voice")))
+    first = part if part is not None else start
+    if first is not None and not 0 <= first < len(segs):
+        raise ValueError("there is no block %d; the reply has %d" % (first, len(segs)))
     if part is not None:
-        if not 0 <= part < len(segs):
-            raise ValueError("there is no block %d; the reply has %d" % (part, len(segs)))
         text, base = segs[part]["spoken"], segs[part]["w0"]
+    elif start is not None:
+        text, base = spoken_text(segs[start:]), segs[start]["w0"]
     else:
         text, base = spoken_text(segs), 0
     if not text.strip():
@@ -724,24 +782,25 @@ def read_aloud(markdown, sid="", part=None, cfg=None):
         if os.path.getmtime(path) < time.time() - 600:
             shutil.rmtree(path, ignore_errors=True)
     now = {"session": sid, "id": int(time.time() * 1000), "state": "making",
-           "markdown": markdown, "segments": segs, "part": part, "base": base, "chunks": []}
+           "markdown": markdown, "segments": segs, "part": part, "base": base,
+           "speed": speed_of(cfg), "chunks": []}
     save_now(now)
     finished = False
     try:
-        speak_reading(text, cfg or load_config(), now)
+        speak_reading(text, cfg, now)
         finished = not HALTED
     finally:
         now["state"] = "done" if finished else "stopped"
         save_now(now)
 
 
-def speak_in_background(markdown, sid="", part=None):
+def speak_in_background(markdown, sid="", part=None, start=None):
     """Start a detached speaker so the hook (or the pane) returns at once."""
     stop_speaking()
     os.makedirs(DATA, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
                                      dir=DATA, prefix=".job-") as f:
-        json.dump({"markdown": markdown, "session": sid, "part": part}, f)
+        json.dump({"markdown": markdown, "session": sid, "part": part, "start": start}, f)
         path = f.name
     proc = subprocess.Popen(
         [sys.executable, os.path.abspath(__file__), "--speak-job", path],
@@ -764,7 +823,7 @@ def run_job(path):
         except OSError:
             pass
     try:
-        read_aloud(job["markdown"], job.get("session", ""), job.get("part"))
+        read_aloud(job["markdown"], job.get("session", ""), job.get("part"), start=job.get("start"))
     except Exception as e:
         if not HALTED:  # a stopped voice exits with an error; that is not a failure
             log("speaking failed: %s" % e)
@@ -887,6 +946,8 @@ def status(sid):
     opts = cfg.get(engine, {})
     shown = ", ".join("%s %s" % kv for kv in sorted(opts.items()) if kv[1] != "")
     print("Engine: %s%s" % (engine, " (" + shown + ")" if shown else ""))
+    print("Speed: %gx" % speed_of(cfg) + (", German voice: %s" % cfg["german_voice"]
+                                         if cfg.get("german_voice") else ""))
     print("Settings: %s" % CONFIG_FILE)
 
 
@@ -1012,9 +1073,15 @@ def main(argv):
         read_aloud(" ".join(argv[2:]) or "Voice mode is working.")
     elif arg == "--speak":
         part = int(argv[argv.index("--part") + 1]) if "--part" in argv else None
-        speak_in_background(sys.stdin.read(), sid, part)
+        start = int(argv[argv.index("--from") + 1]) if "--from" in argv else None
+        speak_in_background(sys.stdin.read(), sid, part, start)
     elif arg == "--segments":
         print(json.dumps({"segments": segments(sys.stdin.read())}))
+    elif arg == "--speed":
+        if len(argv) > 2:
+            print("Speed %gx." % set_speed(argv[2].rstrip("x×")))
+        else:
+            print("Speed %gx." % speed_of(load_config()))
     elif arg == "--voices":
         list_voices()
     elif arg == "--setup":

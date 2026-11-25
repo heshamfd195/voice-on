@@ -40,6 +40,7 @@ You need `python3` (3.9 or newer) on your PATH. On Linux, also install
 | `/voice-on:voice on all` | Read every chat's replies aloud |
 | `/voice-on:voice off` | Silence this chat (`off all` silences every chat) |
 | `/voice-on:voice stop` | Stop talking now |
+| `/voice-on:voice speed 1.5` | Read faster (2) or slower (0.75); 1 is normal |
 | `/voice-on:voice repeat` | Read the last reply again |
 | `/voice-on:voice status` | What is on, and which voice |
 | `/voice-on:voice test` | Say a test sentence |
@@ -65,6 +66,8 @@ themselves and framed while the voice is on them.
 - ◀ Previous and Next ▶ step through this chat's earlier replies. ▶ Read plays
   the one shown, ■ Stop stops it, and Latest jumps back to the newest.
 - Each block has its own ▶ to hear just that part.
+- Speed: 0.75×, 1×, 1.25×, 1.5× and 2×. Changing it while a reply is read picks
+  up again from the block being read, at the new speed.
 - With the pane focused: `p` previous, `n` next, `r` read, `s` stop, `l` latest.
 
 Type `/read-along` to open it by hand. Word timing is exact per sentence and
@@ -113,14 +116,24 @@ Changes apply to the next reply.
 ```json
 {
   "engine": "auto",
-  "say": {"voice": "", "rate": 190},
-  "espeak": {"voice": "en-us", "rate": 175},
-  "kokoro": {"voice": "af_heart", "speed": 1.1, "lang": "en-us"}
+  "speed": 1.0,
+  "say": {"voice": "", "rate": 190, "german_voice": "Anna"},
+  "espeak": {"voice": "en-us", "rate": 175, "german_voice": "de"},
+  "kokoro": {"voice": "af_heart", "speed": 1.1, "lang": "en-us"},
+  "german_voice": ""
 }
 ```
 
 - `engine`: `auto` (Kokoro if installed, otherwise the system voice), `say`,
   `espeak` or `kokoro`.
+- `speed`: how fast every voice reads, 1 being its normal pace (0.5 to 2.5).
+  The pane's speed buttons and `/voice-on:voice speed` set it. Kokoro itself
+  tops out at twice its normal speed.
+- `german_voice`: optional, for German learners. When set, text the reply writes
+  «like this» is read in a German voice: with Kokoro, by the Piper voice of that
+  name (`models/piper/<name>.onnx`, with `piper-tts` installed in the venv, for
+  example `de_DE-kerstin-low`); with `say` or `espeak-ng`, by their own
+  `german_voice`.
 - `say.voice`: empty for the system default, or a name such as Samantha, Daniel
   or Reed (`say -v '?'` lists them). `rate` is words per minute.
 - `espeak.voice`: a voice such as `en-us` or `en-gb` (`espeak-ng --voices=en`).

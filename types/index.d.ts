@@ -40,6 +40,11 @@ export type Reading = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'voice-on': { reading: Shaped<Reading | null>; shown: Shaped<Shown | null> }
+    'voice-on': {
+      reading: Shaped<Reading | null>
+      shown: Shaped<Shown | null>
+      /** The voice's speed, from config.json: 1 is normal. */
+      speed: Shaped<number>
+    }
   }
 }

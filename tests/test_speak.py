@@ -112,6 +112,35 @@ class Reading(unittest.TestCase):
                 now = json.load(f)
             self.assertEqual((now["part"], now["base"], now["chunks"][0]["text"]), (2, 1, "One. Two."))
 
+            speak.read_aloud("# Hi\n\nOne. Two.\n\nThree.", "chat-1", start=2)  # from block 2 on
+            with open(speak.NOW_FILE) as f:
+                now = json.load(f)
+            self.assertEqual((now["base"], [c["text"] for c in now["chunks"]]), (1, ["One. Two. Three."]))
+
+
+class SpeedAndGerman(unittest.TestCase):
+    def test_speed_is_saved_with_the_other_settings_kept(self):
+        with open(speak.CONFIG_FILE, "w") as f:
+            json.dump({"german_voice": "de_DE-kerstin-low", "kokoro": {"speed": 1.1}}, f)
+        self.assertEqual(speak.set_speed("1.5"), 1.5)
+        self.assertEqual(speak.set_speed(9), 2.5)  # kept in range
+        cfg = speak.load_config()
+        self.assertEqual((cfg["speed"], cfg["german_voice"], cfg["kokoro"]["speed"]), (2.5, "de_DE-kerstin-low", 1.1))
+        os.remove(speak.CONFIG_FILE)
+
+    def test_the_system_voice_goes_faster(self):
+        cfg = dict(speak.load_config(), speed=1.5)
+        cmd = speak.system_command("say", cfg, "/tmp/x.wav")
+        self.assertEqual(cmd[cmd.index("-r") + 1], "285")
+        self.assertIn("Anna", speak.system_command("say", cfg, "/tmp/x.wav", "de"))
+
+    def test_german_is_marked_only_when_a_german_voice_is_set(self):
+        self.assertEqual(speak.clean_for_speech("Say «Guten Tag»", german=False), "Say «Guten Tag».")
+        said = speak.clean_for_speech("Say «Guten Tag»", german=True)
+        self.assertEqual(said, "Say [de]Guten Tag.[/de]")
+        self.assertEqual([(c["lang"], c["w0"], c["text"]) for c in speak.make_chunks(said)],
+                         [("en", 0, "Say"), ("de", 1, "Guten Tag.")])
+
 
 class LastReply(unittest.TestCase):
     def test_only_text_after_the_last_tool_call(self):

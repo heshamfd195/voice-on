@@ -1,7 +1,7 @@
 ---
 name: voice
-description: Turn voice mode on or off - Claude's replies are read aloud, and a new prompt stops the speech. Use when the user types /voice-on:voice (on, off, status, repeat, stop, test, voices, setup kokoro), or asks to hear replies read aloud, to hear the last reply again, to stop talking, or to change the voice.
-argument-hint: on | off | status | repeat | stop | test | voices | setup kokoro [all]
+description: Turn voice mode on or off - Claude's replies are read aloud, and a new prompt stops the speech. Use when the user types /voice-on:voice (on, off, status, repeat, stop, speed, test, voices, setup kokoro), or asks to hear replies read aloud, to hear the last reply again, to stop talking, to read faster or slower, or to change the voice.
+argument-hint: on | off | status | repeat | stop | speed [0.75|1|1.25|1.5|2] | test | voices | setup kokoro [all]
 ---
 
 # voice: hear Claude's replies
@@ -15,6 +15,8 @@ the session id and plugin path are filled in for you.
 - `off` → `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/speak.py" --off --session "${CLAUDE_SESSION_ID}"` (add `--all` to silence every chat)
 - `status`, or no argument → `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/speak.py" --status --session "${CLAUDE_SESSION_ID}"`, then say what it printed
 - `stop` (or "stop talking") → `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/speak.py" --halt`
+- `speed 1.5` (or "read faster", "slower") → `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/speak.py" --speed 1.5`.
+  1 is normal; 0.75 slower; 1.25, 1.5 and 2 faster. No number: it says the current speed.
 - `test` → `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/speak.py" --say "Voice mode is working."`
 - `voices` → `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/speak.py" --voices`, then name a few good ones
 - `repeat` (or "say that again", "read your last message again") →
